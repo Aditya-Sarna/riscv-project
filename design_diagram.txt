@@ -1,0 +1,231 @@
+5-Stage Pipelined RISC-V RV64I Core with Zba Extension
+========================================================
+
+DATAPATH DIAGRAM
+----------------
+
+                    ┌──────────────────────────────────────────────────────┐
+                    │                  INSTRUCTION FETCH (IF)              │
+                    │                                                      │
+                    │  ┌──────┐                                           │
+                    │  │  PC  │───────────┐                               │
+                    │  └──┬───┘           │                               │
+                    │     │               ↓                               │
+                    │     │         ┌──────────┐                          │
+                    │     │         │   IMEM   │                          │
+                    │     │         │ (ROM)    │                          │
+                    │     │         └────┬─────┘                          │
+                    │     │              │                                │
+                    │     └──────+4──────┘                                │
+                    └───────────────────┬──────────────────────────────────┘
+                                        │ [instr, PC]
+                                        ↓
+                    ┌─────────────── IF/ID ────────────────────────────────┐
+                    │               (Pipeline Register)                    │
+                    └───────────────────┬──────────────────────────────────┘
+                                        │
+                                        ↓
+                    ┌──────────────────────────────────────────────────────┐
+                    │              INSTRUCTION DECODE (ID)                 │
+                    │                                                      │
+                    │  ┌──────────────┐         ┌─────────────┐          │
+                    │  │   Decoder    │         │  Register   │          │
+                    │  │   - opcode   │         │    File     │          │
+                    │  │   - funct3/7 │         │   32 x 64   │          │
+                    │  │   - imm gen  │         └──┬──────┬───┘          │
+                    │  └──────────────┘            │      │               │
+                    │                            rs1_val rs2_val          │
+                    │                                                      │
+                    │  Zba Opcode Check: opcode == 0x7F?                  │
+                    └───────────────────┬──────────────────────────────────┘
+                                        │ [opcode, funct3/7, rs1/2_val, imm, rd]
+                                        ↓
+                    ┌─────────────── ID/EX ────────────────────────────────┐
+                    │               (Pipeline Register)                    │
+                    └───────────────────┬──────────────────────────────────┘
+                                        │
+                                        ↓
+                    ┌──────────────────────────────────────────────────────┐
+                    │                   EXECUTE (EX)                       │
+                    │                                                      │
+                    │  ┌────────────────────────────────────────┐         │
+                    │  │          ALU Control Logic             │         │
+                    │  │  ┌──────────────────────────────────┐  │         │
+                    │  │  │  if (opcode == 0x7F)  // Zba    │  │         │
+                    │  │  │    case (funct7)                │  │         │
+                    │  │  │      0x12: AG_ADD (rs1+rs2)     │  │         │
+                    │  │  │  else // RV64I                  │  │         │
+                    │  │  │    case (opcode)                │  │         │
+                    │  │  │      0x33: R-type (ADD/SUB)     │  │         │
+                    │  │  │      0x13: I-type (ADDI)        │  │         │
+                    │  │  │      0x03: Load                 │  │         │
+                    │  │  │      0x23: Store                │  │         │
+                    │  │  │      0x6F: JAL                  │  │         │
+                    │  │  └──────────────────────────────────┘  │         │
+                    │  └────────────────┬───────────────────────┘         │
+                    │                   ↓                                  │
+                    │              ┌────────┐                             │
+                    │              │  ALU   │                             │
+                    │              │ 64-bit │                             │
+                    │              └───┬────┘                             │
+                    │                  │ alu_result                       │
+                    │                  │                                  │
+                    │         mem_read / mem_write signals                │
+                    └───────────────────┬──────────────────────────────────┘
+                                        │ [alu_out, mem_rd/wr, rs2_val, rd]
+                                        ↓
+                    ┌─────────────── EX/MEM ───────────────────────────────┐
+                    │               (Pipeline Register)                    │
+                    └───────────────────┬──────────────────────────────────┘
+                                        │
+                                        ↓
+                    ┌──────────────────────────────────────────────────────┐
+                    │                    MEMORY (MEM)                      │
+                    │                                                      │
+                    │                ┌──────────┐                         │
+                    │     addr ────→ │   DMEM   │ ←──── wdata            │
+                    │                │  (RAM)   │                         │
+                    │   mem_ren ───→ │  64-bit  │ ───→ rdata             │
+                    │   mem_wen ───→ │  words   │                         │
+                    │                └──────────┘                         │
+                    │                                                      │
+                    └───────────────────┬──────────────────────────────────┘
+                                        │ [lsu_data, alu_out, rd]
+                                        ↓
+                    ┌─────────────── MEM/WB ───────────────────────────────┐
+                    │               (Pipeline Register)                    │
+                    └───────────────────┬──────────────────────────────────┘
+                                        │
+                                        ↓
+                    ┌──────────────────────────────────────────────────────┐
+                    │                 WRITEBACK (WB)                       │
+                    │                                                      │
+                    │             ┌──────────────┐                         │
+                    │  lsu_data   │     MUX      │                         │
+                    │  ───────────→│   (select   │                         │
+                    │  alu_out    │   load or    │                         │
+                    │  ───────────→│   alu_out)  │                         │
+                    │             └──────┬───────┘                         │
+                    │                    │ write_data                      │
+                    │                    ↓                                 │
+                    │              Register File                           │
+                    │              (write to rd)                           │
+                    └──────────────────────────────────────────────────────┘
+
+
+CONTROL SIGNALS
+===============
+
+Main Control Unit (in ID stage):
+- Inputs: opcode[6:0], funct3[2:0], funct7[6:0]
+- Outputs:
+  * alu_ctrl[3:0]      → ALU operation select
+  * mem_read           → Data memory read enable
+  * mem_write          → Data memory write enable
+  * reg_write          → Register file write enable
+
+Zba Extension Control Logic (in EX stage):
+- Checks: if (opcode == 7'h7F)
+  * Decode funct7 to determine Zba operation
+  * funct7 = 0x12 → AG_ADD (Address Generation ADD)
+  * Routes operands to ALU with ADD control
+
+Pipeline Control:
+- Stall logic (not fully implemented in this simple version)
+- Flush logic for branches (not fully implemented)
+
+
+MEMORY INTERFACES
+=================
+
+Instruction Memory (IMEM):
+- Type: Read-only ROM
+- Interface:
+  * Input:  addr[63:0]     (byte address from PC)
+  * Output: instr[31:0]    (32-bit instruction)
+- Initialization: $readmemh("rtl/imem.hex")
+- Size: 4 KB (configurable via ADDR_WIDTH parameter)
+
+Data Memory (DMEM):
+- Type: Read/Write RAM
+- Interface:
+  * Input:  clk
+  * Input:  ren              (read enable)
+  * Input:  wen              (write enable)
+  * Input:  addr[63:0]       (byte address)
+  * Input:  wdata[63:0]      (write data)
+  * Output: rdata[63:0]      (read data)
+- Size: 4 KB (configurable via ADDR_WIDTH parameter)
+- Word size: 64-bit
+
+
+ZBA EXTENSION IMPLEMENTATION
+============================
+
+Custom Opcode Family: 0x7F
+- Encoding: R-type format
+  * [31:25] = funct7 (sub-opcode)
+  * [24:20] = rs2
+  * [19:15] = rs1
+  * [14:12] = funct3 (typically 0)
+  * [11:7]  = rd
+  * [6:0]   = 0x7F (custom opcode)
+
+Implemented Zba Operations:
+1. AG_ADD (funct7 = 0x12)
+   - Function: rd = rs1 + rs2
+   - Purpose: Address generation via addition
+   - Decoded in EX stage
+   - Uses ALU ADD operation (alu_ctrl = 4'd0)
+
+Decoder Logic Location:
+- File: rtl/core.sv, EX stage combinational block
+- Line: ~114-125 (Zba opcode check and dispatch)
+
+
+MODULE HIERARCHY
+================
+
+core.sv (top)
+├── regfile.sv    (32 x 64-bit register file)
+├── alu.sv        (64-bit ALU with 10 operations)
+├── imem.sv       (instruction ROM, external instantiation)
+└── dmem.sv       (data RAM, external instantiation)
+
+
+PIPELINE REGISTERS
+==================
+
+IF/ID:
+- if_id_instr[31:0]
+- if_id_pc[63:0]
+
+ID/EX:
+- id_ex_rs1[4:0], id_ex_rs2[4:0], id_ex_rd[4:0]
+- id_ex_rs1_val[63:0], id_ex_rs2_val[63:0]
+- id_ex_imm[63:0]
+- id_ex_opcode[6:0], id_ex_funct3[2:0], id_ex_funct7[6:0]
+
+EX/MEM:
+- ex_mem_rd[4:0]
+- ex_mem_alu_out[63:0]
+- ex_mem_rs2_val[63:0]
+- ex_mem_mem_write, ex_mem_mem_read
+
+MEM/WB:
+- mem_wb_rd[4:0]
+- mem_wb_alu_out[63:0]
+- mem_wb_lsu_data[63:0]
+- mem_wb_reg_write
+
+
+NOTES
+=====
+
+1. This is a teaching-quality implementation for functional verification.
+2. Hazard detection and forwarding are minimal in this version.
+3. Branch prediction is not implemented.
+4. The Zba extension uses a custom opcode (0x7F) for demonstration.
+5. Only a subset of RV64I instructions are implemented (ADD, SUB, ADDI, LD, SD, JAL).
+6. Testbench validates by checking a memory location for a known value.
+

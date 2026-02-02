@@ -1,0 +1,17 @@
+# Build commands for RISC-V toolchain (assumes riscv64-unknown-elf-* tools installed)
+
+# 1) Compile C to ELF
+#    - compile test.c into an ELF linked at address 0x0 so imem hex starts at 0
+riscv64-unknown-elf-gcc -march=rv64i -mabi=lp64 -O0 -nostdlib -Ttext=0x0 software/test.c -o software/test.elf
+
+# 2) Dump binary
+riscv64-unknown-elf-objcopy -O binary software/test.elf software/test.bin
+
+# 3) Convert binary to 32-bit little-endian words (one hex word per line) for $readmemh
+#    On macOS, use 'xxd' or 'hexdump' depending on availability.
+hexdump -v -e '1/4 "%08x\n"' software/test.bin > rtl/imem.hex
+
+# (Optional) Inspect with objdump
+riscv64-unknown-elf-objdump -D -Mintel -b binary -m riscv:rv64 software/test.bin | sed -n '1,200p'
+
+# Now run your simulator and make sure rtl/imem.hex is found by the testbench

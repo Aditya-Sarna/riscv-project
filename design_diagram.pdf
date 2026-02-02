@@ -1,0 +1,13 @@
+Design diagram placeholder
+
+This file is a placeholder for the required design diagram PDF. Please replace
+this file with a draw.io exported PDF or a scanned PDF of your hand-drawn
+datapath diagram. The diagram should show:
+
+- Datapath components (ALU, register file, PC, pipeline registers)
+- Control signal sources (control unit) and key control signals
+- Instruction flow through the pipeline (IF, ID, EX, MEM, WB)
+- Memory interfaces (imem and dmem)
+- Where the Zba-specific decoding/logic is implemented (ID/EX and EX)
+
+To produce a valid submission, replace this file with a proper PDF.
